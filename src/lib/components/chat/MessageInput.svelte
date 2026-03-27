@@ -453,6 +453,7 @@
 
 	let user = null;
 	export let placeholder = '';
+	const CHAT_INPUT_DISABLED = true;
 
 	let visionCapableModels = [];
 	$: visionCapableModels = (atSelectedModel?.id ? [atSelectedModel.id] : selectedModels).filter(
@@ -1207,6 +1208,9 @@
 					<form
 						class="w-full flex flex-col gap-1.5 {recording ? 'hidden' : ''}"
 						on:submit|preventDefault={() => {
+							if (CHAT_INPUT_DISABLED) {
+								return;
+							}
 							// check if selectedModels support image input
 							dispatch('submit', prompt);
 						}}
@@ -1397,7 +1401,7 @@
 												<RichTextInput
 													bind:this={chatInputElement}
 													id="chat-input"
-													editable={!showInputModal}
+													editable={!showInputModal && !CHAT_INPUT_DISABLED}
 													onChange={(content) => {
 														prompt = content.md;
 														inputContent = content;
@@ -1416,7 +1420,11 @@
 															navigator.maxTouchPoints > 0 ||
 															navigator.msMaxTouchPoints > 0
 														)}
-													placeholder={placeholder ? placeholder : $i18n.t('Send a Message')}
+													placeholder={CHAT_INPUT_DISABLED
+														? $i18n.t('Chat input is disabled')
+														: placeholder
+															? placeholder
+															: $i18n.t('Send a Message')}
 													largeTextAsFile={($settings?.largeTextAsFile ?? false) && !shiftKey}
 													autocomplete={$config?.features?.enable_autocomplete_generation &&
 														($settings?.promptAutocomplete ?? false)}
@@ -1499,6 +1507,9 @@
 
 																if (enterPressed) {
 																	e.preventDefault();
+																	if (CHAT_INPUT_DISABLED) {
+																		return;
+																	}
 																	if (prompt !== '' || files.length > 0) {
 																		dispatch('submit', prompt);
 																	}
@@ -1995,15 +2006,19 @@
 												<Tooltip
 													content={uploadPending
 														? $i18n.t('Waiting for upload...')
-														: $i18n.t('Send message')}
+														: CHAT_INPUT_DISABLED
+															? $i18n.t('Chat input is disabled')
+															: $i18n.t('Send message')}
 												>
 													<button
 														id="send-message-button"
-														class="{!(prompt === '' && files.length === 0) || uploadPending
+														class="{!CHAT_INPUT_DISABLED && (!(prompt === '' && files.length === 0) || uploadPending)
 															? 'bg-black text-white hover:bg-gray-900 dark:bg-white dark:text-black dark:hover:bg-gray-100 '
 															: 'text-white bg-gray-200 dark:text-gray-900 dark:bg-gray-700 disabled'} transition rounded-full p-1.5 self-center"
 														type="submit"
-														disabled={(prompt === '' && files.length === 0) || uploadPending}
+														disabled={CHAT_INPUT_DISABLED ||
+															(prompt === '' && files.length === 0) ||
+															uploadPending}
 													>
 														{#if uploadPending}
 															<Spinner className="size-5" />
