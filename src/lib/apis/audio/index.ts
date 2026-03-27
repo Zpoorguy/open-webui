@@ -101,9 +101,20 @@ export const synthesizeOpenAISpeech = async (
 	token: string = '',
 	speaker: string = 'alloy',
 	text: string = '',
-	model?: string
+	options?: { ttsModel?: string; ttsEngine?: string }
 ) => {
 	let error = null;
+
+	const body: Record<string, unknown> = {
+		input: text,
+		voice: speaker
+	};
+	if (options?.ttsModel) {
+		body.tts_model = options.ttsModel;
+	}
+	if (options?.ttsEngine) {
+		body.tts_engine = options.ttsEngine;
+	}
 
 	const res = await fetch(`${AUDIO_API_BASE_URL}/speech`, {
 		method: 'POST',
@@ -111,11 +122,7 @@ export const synthesizeOpenAISpeech = async (
 			Authorization: `Bearer ${token}`,
 			'Content-Type': 'application/json'
 		},
-		body: JSON.stringify({
-			input: text,
-			voice: speaker,
-			...(model && { model })
-		})
+		body: JSON.stringify(body)
 	})
 		.then(async (res) => {
 			if (!res.ok) throw await res.json();

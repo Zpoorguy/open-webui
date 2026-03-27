@@ -207,14 +207,16 @@
 		}
 
 		if (tts.voice !== '') {
-			if (!info.meta.tts) info.meta.tts = {};
+			if (!info.meta.tts) {
+				info.meta.tts = {};
+			}
 			info.meta.tts.voice = tts.voice;
 		} else {
 			if (info.meta.tts?.voice) {
 				delete info.meta.tts.voice;
-				if (Object.keys(info.meta.tts).length === 0) {
-					delete info.meta.tts;
-				}
+			}
+			if (info.meta.tts && Object.keys(info.meta.tts).length === 0) {
+				delete info.meta.tts;
 			}
 		}
 

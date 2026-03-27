@@ -316,12 +316,6 @@ def load_speech_pipeline(request):
 
 @router.post('/speech')
 async def speech(request: Request, user=Depends(get_verified_user)):
-    if request.app.state.config.TTS_ENGINE == '':
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=ERROR_MESSAGES.NOT_FOUND,
-        )
-
     if user.role != 'admin' and not has_permission(user.id, 'chat.tts', request.app.state.config.USER_PERMISSIONS):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -329,10 +323,33 @@ async def speech(request: Request, user=Depends(get_verified_user)):
         )
 
     body = await request.body()
+    try:
+        payload = json.loads(body.decode('utf-8'))
+    except Exception as e:
+        log.exception(e)
+        raise HTTPException(status_code=400, detail='Invalid JSON payload')
+
+    # Per-model overrides (see model meta.tts in workspace model editor)
+    tts_engine_override = payload.pop('tts_engine', None)
+    tts_model_override = payload.pop('tts_model', None)
+
+    effective_engine = (tts_engine_override or '').strip() or (request.app.state.config.TTS_ENGINE or '').strip()
+    effective_model = (
+        tts_model_override
+        if tts_model_override not in (None, '')
+        else request.app.state.config.TTS_MODEL
+    )
+
+    if effective_engine == '':
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+
     name = hashlib.sha256(
         body
-        + str(request.app.state.config.TTS_ENGINE).encode('utf-8')
-        + str(request.app.state.config.TTS_MODEL).encode('utf-8')
+        + str(effective_engine).encode('utf-8')
+        + str(effective_model).encode('utf-8')
     ).hexdigest()
 
     file_path = SPEECH_CACHE_DIR.joinpath(f'{name}.mp3')
@@ -342,16 +359,9 @@ async def speech(request: Request, user=Depends(get_verified_user)):
     if file_path.is_file():
         return FileResponse(file_path)
 
-    payload = None
-    try:
-        payload = json.loads(body.decode('utf-8'))
-    except Exception as e:
-        log.exception(e)
-        raise HTTPException(status_code=400, detail='Invalid JSON payload')
-
     r = None
-    if request.app.state.config.TTS_ENGINE == 'openai':
-        payload['model'] = request.app.state.config.TTS_MODEL
+    if effective_engine == 'openai':
+        payload['model'] = effective_model
 
         try:
             timeout = aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT)
@@ -407,10 +417,10 @@ async def speech(request: Request, user=Depends(get_verified_user)):
                 detail=detail,
             )
 
-    elif request.app.state.config.TTS_ENGINE == 'elevenlabs':
+    elif effective_engine == 'elevenlabs':
         voice_id = payload.get('voice', '')
 
-        if voice_id not in get_available_voices(request):
+        if voice_id not in get_available_voices(request, effective_engine):
             raise HTTPException(
                 status_code=400,
                 detail='Invalid voice id',
@@ -423,7 +433,7 @@ async def speech(request: Request, user=Depends(get_verified_user)):
                     f'{ELEVENLABS_API_BASE_URL}/v1/text-to-speech/{voice_id}',
                     json={
                         'text': payload['input'],
-                        'model_id': request.app.state.config.TTS_MODEL,
+                        'model_id': effective_model,
                         'voice_settings': {'stability': 0.5, 'similarity_boost': 0.5},
                     },
                     headers={
@@ -460,22 +470,16 @@ async def speech(request: Request, user=Depends(get_verified_user)):
                 detail=detail if detail else 'Open WebUI: Server Connection Error',
             )
 
-    elif request.app.state.config.TTS_ENGINE == 'azure':
-        try:
-            payload = json.loads(body.decode('utf-8'))
-        except Exception as e:
-            log.exception(e)
-            raise HTTPException(status_code=400, detail='Invalid JSON payload')
-
+    elif effective_engine == 'azure':
         region = request.app.state.config.TTS_AZURE_SPEECH_REGION or 'eastus'
         base_url = request.app.state.config.TTS_AZURE_SPEECH_BASE_URL
-        language = request.app.state.config.TTS_VOICE
-        locale = '-'.join(request.app.state.config.TTS_VOICE.split('-')[:2])
+        voice_name = (payload.get('voice') or '').strip() or request.app.state.config.TTS_VOICE
+        locale = '-'.join(voice_name.split('-')[:2])
         output_format = request.app.state.config.TTS_AZURE_SPEECH_OUTPUT_FORMAT
 
         try:
             data = f"""<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{locale}">
-                <voice name="{language}">{html.escape(payload['input'])}</voice>
+                <voice name="{voice_name}">{html.escape(payload['input'])}</voice>
             </speak>"""
             timeout = aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT)
             async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
@@ -516,14 +520,7 @@ async def speech(request: Request, user=Depends(get_verified_user)):
                 detail=detail if detail else 'Open WebUI: Server Connection Error',
             )
 
-    elif request.app.state.config.TTS_ENGINE == 'transformers':
-        payload = None
-        try:
-            payload = json.loads(body.decode('utf-8'))
-        except Exception as e:
-            log.exception(e)
-            raise HTTPException(status_code=400, detail='Invalid JSON payload')
-
+    elif effective_engine == 'transformers':
         import torch
         import soundfile as sf
 
@@ -533,7 +530,7 @@ async def speech(request: Request, user=Depends(get_verified_user)):
 
         speaker_index = 6799
         try:
-            speaker_index = embeddings_dataset['filename'].index(request.app.state.config.TTS_MODEL)
+            speaker_index = embeddings_dataset['filename'].index(effective_model)
         except Exception:
             pass
 
@@ -550,6 +547,11 @@ async def speech(request: Request, user=Depends(get_verified_user)):
             await f.write(json.dumps(payload))
 
         return FileResponse(file_path)
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail='Unsupported TTS engine',
+    )
 
 
 def transcription_handler(request, file_path, metadata, user=None):
@@ -1246,10 +1248,12 @@ async def get_models(request: Request, user=Depends(get_verified_user)):
     return {'models': get_available_models(request)}
 
 
-def get_available_voices(request) -> dict:
+def get_available_voices(request, engine: Optional[str] = None) -> dict:
     """Returns {voice_id: voice_name} dict"""
     available_voices = {}
-    if request.app.state.config.TTS_ENGINE == 'openai':
+    if engine is None:
+        engine = request.app.state.config.TTS_ENGINE
+    if engine == 'openai':
         # Use custom endpoint if not using the official OpenAI API URL
         if not request.app.state.config.TTS_OPENAI_API_BASE_URL.startswith('https://api.openai.com'):
             try:
@@ -1280,13 +1284,13 @@ def get_available_voices(request) -> dict:
                 'nova': 'nova',
                 'shimmer': 'shimmer',
             }
-    elif request.app.state.config.TTS_ENGINE == 'elevenlabs':
+    elif engine == 'elevenlabs':
         try:
             available_voices = get_elevenlabs_voices(api_key=request.app.state.config.TTS_API_KEY)
         except Exception:
             # Avoided @lru_cache with exception
             pass
-    elif request.app.state.config.TTS_ENGINE == 'azure':
+    elif engine == 'azure':
         try:
             region = request.app.state.config.TTS_AZURE_SPEECH_REGION
             base_url = request.app.state.config.TTS_AZURE_SPEECH_BASE_URL

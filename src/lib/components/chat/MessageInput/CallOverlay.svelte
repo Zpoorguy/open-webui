@@ -14,6 +14,14 @@
 	import VideoInputMenu from './CallOverlay/VideoInputMenu.svelte';
 	import { KokoroWorker } from '$lib/workers/KokoroWorker';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
+	import {
+		shouldUseWebSpeechForTts,
+		getResolvedTtsEngine,
+		getEffectiveTtsVoice,
+		getEffectiveKokoroDtype,
+		getMetaTtsEnginePayload,
+		getMetaTtsModelPayload
+	} from '$lib/utils/tts';
 
 	const i18n = getContext('i18n');
 
@@ -27,6 +35,8 @@
 	let wakeLock = null;
 
 	let model = null;
+
+	$: model = $models.find((m) => m.id === modelId);
 
 	let loading = false;
 	let confirmed = false;
@@ -363,18 +373,7 @@
 	let currentMessageId = null;
 	let currentUtterance = null;
 
-	// Get voice: model-specific > user settings > config default
-	const getVoiceId = () => {
-		// Check for model-specific TTS voice first
-		if (model?.info?.meta?.tts?.voice) {
-			return model.info.meta.tts.voice;
-		}
-		// Fall back to user settings or config default
-		if ($settings?.audio?.tts?.defaultVoice === $config.audio.tts.voice) {
-			return $settings?.audio?.tts?.voice ?? $config?.audio?.tts?.voice;
-		}
-		return $config?.audio?.tts?.voice;
-	};
+	const getVoiceId = () => getEffectiveTtsVoice(model, $settings, $config);
 
 	const speakSpeechSynthesisHandler = (content) => {
 		if ($showCallOverlay) {
@@ -476,7 +475,15 @@
 					}
 				}
 
-				if ($settings.audio?.tts?.engine === 'browser-kokoro') {
+				if (getResolvedTtsEngine(model, $settings) === 'browser-kokoro') {
+					if (!$TTSWorker) {
+						await TTSWorker.set(
+							new KokoroWorker({
+								dtype: getEffectiveKokoroDtype(model, $settings)
+							})
+						);
+						await $TTSWorker.init();
+					}
 					const url = await $TTSWorker
 						.generate({
 							text: content,
@@ -490,13 +497,14 @@
 					if (url) {
 						audioCache.set(content, new Audio(url));
 					}
-				} else if ($config.audio.tts.engine !== '') {
-					const res = await synthesizeOpenAISpeech(localStorage.token, getVoiceId(), content).catch(
-						(error) => {
-							console.error(error);
-							return null;
-						}
-					);
+				} else if (!shouldUseWebSpeechForTts($config.audio.tts.engine, model, $settings)) {
+					const res = await synthesizeOpenAISpeech(localStorage.token, getVoiceId(), content, {
+						ttsEngine: getMetaTtsEnginePayload(model),
+						ttsModel: getMetaTtsModelPayload(model)
+					}).catch((error) => {
+						console.error(error);
+						return null;
+					});
 
 					if (res) {
 						const blob = await res.blob();
@@ -532,7 +540,7 @@
 						emoji = null;
 					}
 
-					if ($config.audio.tts.engine !== '') {
+					if (!shouldUseWebSpeechForTts($config.audio.tts.engine, model, $settings)) {
 						try {
 							console.log(
 								'%c%s',
@@ -650,8 +658,6 @@
 				}
 			});
 		}
-
-		model = $models.find((m) => m.id === modelId);
 
 		startRecording();
 

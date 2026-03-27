@@ -36,6 +36,15 @@
 		removeDetails,
 		removeAllDetails
 	} from '$lib/utils';
+	import {
+		shouldUseWebSpeechForTts,
+		getResolvedTtsEngine,
+		getEffectiveTtsVoice,
+		getEffectiveKokoroDtype,
+		getEffectiveTtsSplitOn,
+		getMetaTtsEnginePayload,
+		getMetaTtsModelPayload
+	} from '$lib/utils/tts';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 
 	import Name from './Name.svelte';
@@ -221,27 +230,20 @@
 		speaking = true;
 		const content = removeAllDetails(message.content);
 
-		// Get voice: model-specific > user settings > config default
-		const getVoiceId = () => {
-			// Check for model-specific TTS voice first
-			if (model?.info?.meta?.tts?.voice) {
-				return model.info.meta.tts.voice;
-			}
-			// Fall back to user settings or config default
-			if ($settings?.audio?.tts?.defaultVoice === $config.audio.tts.voice) {
-				return $settings?.audio?.tts?.voice ?? $config?.audio?.tts?.voice;
-			}
-			return $config?.audio?.tts?.voice;
-		};
+		const voiceId = getEffectiveTtsVoice(model, $settings, $config);
+		const resolvedEngine = getResolvedTtsEngine(model, $settings);
+		const kokoroDtype = getEffectiveKokoroDtype(model, $settings);
+		const splitOn = getEffectiveTtsSplitOn(model, $config);
+		const ttsEnginePayload = getMetaTtsEnginePayload(model);
+		const ttsModelPayload = getMetaTtsModelPayload(model);
 
-		if ($config.audio.tts.engine === '') {
+		if (shouldUseWebSpeechForTts($config.audio.tts.engine, model, $settings)) {
 			let voices = [];
 			const getVoicesLoop = setInterval(() => {
 				voices = speechSynthesis.getVoices();
 				if (voices.length > 0) {
 					clearInterval(getVoicesLoop);
 
-					const voiceId = getVoiceId();
 					const voice = voices?.filter((v) => v.voiceURI === voiceId)?.at(0) ?? undefined;
 
 					console.log(voice);
@@ -274,10 +276,7 @@
 			};
 
 			loadingSpeech = true;
-			const messageContentParts: string[] = getMessageContentParts(
-				content,
-				$config?.audio?.tts?.split_on ?? 'punctuation'
-			);
+			const messageContentParts: string[] = getMessageContentParts(content, splitOn);
 
 			if (!messageContentParts.length) {
 				console.log('No content to speak');
@@ -288,14 +287,13 @@
 				return;
 			}
 
-			const voiceId = getVoiceId();
 			console.debug('Prepared message content for TTS', messageContentParts, 'voice:', voiceId);
 
-			if ($settings.audio?.tts?.engine === 'browser-kokoro') {
+			if (resolvedEngine === 'browser-kokoro') {
 				if (!$TTSWorker) {
 					await TTSWorker.set(
 						new KokoroWorker({
-							dtype: $settings.audio?.tts?.engineConfig?.dtype ?? 'fp32'
+							dtype: kokoroDtype
 						})
 					);
 
@@ -323,15 +321,16 @@
 				}
 			} else {
 				for (const [idx, sentence] of messageContentParts.entries()) {
-					const res = await synthesizeOpenAISpeech(localStorage.token, voiceId, sentence).catch(
-						(error) => {
-							console.error(error);
-							toast.error(`${error}`);
+					const res = await synthesizeOpenAISpeech(localStorage.token, voiceId, sentence, {
+						ttsEngine: ttsEnginePayload,
+						ttsModel: ttsModelPayload
+					}).catch((error) => {
+						console.error(error);
+						toast.error(`${error}`);
 
-							speaking = false;
-							loadingSpeech = false;
-						}
-					);
+						speaking = false;
+						loadingSpeech = false;
+					});
 
 					if (res && speaking) {
 						const blob = await res.blob();
