@@ -453,7 +453,7 @@
 
 	let user = null;
 	export let placeholder = '';
-	const CHAT_INPUT_DISABLED = true;
+	$: chatInputDisabled = $_user?.role !== 'admin';
 
 	let visionCapableModels = [];
 	$: visionCapableModels = (atSelectedModel?.id ? [atSelectedModel.id] : selectedModels).filter(
@@ -1208,7 +1208,7 @@
 					<form
 						class="w-full flex flex-col gap-1.5 {recording ? 'hidden' : ''}"
 						on:submit|preventDefault={() => {
-							if (CHAT_INPUT_DISABLED) {
+							if (chatInputDisabled) {
 								return;
 							}
 							// check if selectedModels support image input
@@ -1401,7 +1401,7 @@
 												<RichTextInput
 													bind:this={chatInputElement}
 													id="chat-input"
-													editable={!showInputModal && !CHAT_INPUT_DISABLED}
+													editable={!showInputModal && !chatInputDisabled}
 													onChange={(content) => {
 														prompt = content.md;
 														inputContent = content;
@@ -1420,8 +1420,8 @@
 															navigator.maxTouchPoints > 0 ||
 															navigator.msMaxTouchPoints > 0
 														)}
-													placeholder={CHAT_INPUT_DISABLED
-														? $i18n.t('Chat input is disabled')
+													placeholder={chatInputDisabled
+														? $i18n.t('請使用語音模型')
 														: placeholder
 															? placeholder
 															: $i18n.t('Send a Message')}
@@ -1507,7 +1507,7 @@
 
 																if (enterPressed) {
 																	e.preventDefault();
-																	if (CHAT_INPUT_DISABLED) {
+																	if (chatInputDisabled) {
 																		return;
 																	}
 																	if (prompt !== '' || files.length > 0) {
@@ -2006,17 +2006,17 @@
 												<Tooltip
 													content={uploadPending
 														? $i18n.t('Waiting for upload...')
-														: CHAT_INPUT_DISABLED
-															? $i18n.t('Chat input is disabled')
+														: chatInputDisabled
+															? $i18n.t('Only administrators can send messages')
 															: $i18n.t('Send message')}
 												>
 													<button
 														id="send-message-button"
-														class="{!CHAT_INPUT_DISABLED && (!(prompt === '' && files.length === 0) || uploadPending)
+														class="{!chatInputDisabled && (!(prompt === '' && files.length === 0) || uploadPending)
 															? 'bg-black text-white hover:bg-gray-900 dark:bg-white dark:text-black dark:hover:bg-gray-100 '
 															: 'text-white bg-gray-200 dark:text-gray-900 dark:bg-gray-700 disabled'} transition rounded-full p-1.5 self-center"
 														type="submit"
-														disabled={CHAT_INPUT_DISABLED ||
+														disabled={chatInputDisabled ||
 															(prompt === '' && files.length === 0) ||
 															uploadPending}
 													>
